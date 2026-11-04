@@ -1,0 +1,19 @@
+
+[server]
+# Chỉ lắng nghe trên localhost
+address = "127.0.0.1"
+port = 8501
+
+# Bật tính năng tự động reload khi lưu file
+fileWatcherType = "auto" 
+runOnSave = true
+
+[browser]
+# Không gửi thống kê ẩn danh
+gatherUsageStats = false
+# Tự động mở trình duyệt khi chạy lệnh (nếu muốn)
+# serverHeadless = false
+
+[client]
+# (Tuỳ chọn) Ẩn thanh điều hướng bên trái nếu bạn không dùng st.sidebar
+showSidebarNavigation = false
