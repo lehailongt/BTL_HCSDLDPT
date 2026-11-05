@@ -1,5 +1,0 @@
-data/
-.env
-__pycache__/
-testdb.sql
-tempCodeRunnerFile.py

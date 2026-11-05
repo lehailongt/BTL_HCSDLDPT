@@ -1,0 +1,12 @@
+drop schema flower_image_db;
+
+SELECT 
+    TABLE_NAME, 
+    INDEX_NAME, 
+    NON_UNIQUE, 
+    SEQ_IN_INDEX, 
+    COLUMN_NAME, 
+    INDEX_TYPE
+FROM information_schema.STATISTICS 
+WHERE TABLE_SCHEMA = DATABASE() 
+ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX;
