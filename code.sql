@@ -8,7 +8,8 @@ CREATE TABLE Images (
     file_name VARCHAR(255) NOT NULL,        -- Tên file ảnh (VD: hong_01.jpg)
     file_path VARCHAR(500) NOT NULL,        -- Đường dẫn lưu trữ ảnh
     flower_species VARCHAR(100),            -- Tên loài hoa (nếu biết)
-    upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_file_name (file_name) 
 );
 
 -- 3. Bộ thuộc tính 1: Màu sắc chủ đạo

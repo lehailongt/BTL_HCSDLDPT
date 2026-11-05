@@ -11,7 +11,6 @@ from feature_extractor import extract_all_feature
 def _to_float(x, default=0.0):
     """Ép về float an toàn (None/NaN -> default)."""
     try:
-        print("x : ", x)
         if x is None:
             return default
         v = float(x)
@@ -32,7 +31,10 @@ def _insert_image(cursor, file_path, species):
     sql = """
         INSERT INTO Images (file_name, file_path, flower_species)
         VALUES (%s, %s, %s)
-        ON DUPLICATE KEY UPDATE image_id = LAST_INSERT_ID(image_id)
+        ON DUPLICATE KEY UPDATE
+            image_id = LAST_INSERT_ID(image_id),
+            file_path = VALUES(file_path),
+            flower_species = VALUES(flower_species)
     """
     cursor.execute(sql, (file_name, file_path, species))
     return cursor.lastrowid
@@ -180,8 +182,26 @@ def save_features_to_db(feature_dict, species=None):
         conn.close()
 
 
-if __name__ == "__main__":
+def test():
     path = "data/1.jpg"
     feats = extract_all_feature(path)
     print(feats)
     save_features_to_db(feats, "bong hoa")
+
+
+def main():
+    FOLDER = "data"
+    paths = os.listdir(FOLDER)
+    # Tách lấy phần số, ép sang int để sort
+    paths.sort(key=lambda x: int(os.path.splitext(x)[0]))
+    # print(paths)
+    for filename in paths:
+        print(filename)
+        full_path = os.path.join(FOLDER, filename)
+        feats = extract_all_feature(full_path)
+        save_features_to_db(feats, "bong hoa")
+
+
+if __name__ == "__main__":
+    # test()
+    main()
