@@ -1,95 +1,93 @@
+import json
 from db_connection import get_connection
+from utils import print_dict
 
 
-def get_all_images_basic():
-    """Lấy danh sách tất cả ảnh (chỉ lấy thông tin cơ bản)."""
+def fetch_all(sql, params=()):
+    """Trả về 1 list[Dict] dict: key = tên thuộc tính, value = giá trị"""
     conn = get_connection()
     if not conn:
         return []
 
     try:
         with conn.cursor() as cursor:
-            sql = "SELECT image_id, file_name, file_path, flower_species FROM Images"
-            cursor.execute(sql)
-            return cursor.fetchall()
-    finally:
-        conn.close()
-
-
-def get_image_full_details(image_id):
-    """Lấy TOÀN BỘ thông tin của 1 ảnh (kết hợp tất cả các bảng)."""
-    conn = get_connection()
-    if not conn:
-        return None
-
-    try:
-        with conn.cursor() as cursor:
-            # Dùng LEFT JOIN để lấy dữ liệu từ tất cả các bảng
-            sql = """
-                SELECT
-                    i.*,
-                    c.hist_hsv, c.mean_h, c.mean_s, c.std_h, c.std_s,
-                    c.entropy, c.dominant_color_ratio, c.gradient_s_radius,
-                    s.area, s.perimeter, s.circularity, s.aspect_ratio, s.solidity,
-                    s.hu_moment_1, s.hu_moment_2, s.hu_moment_3,
-                    s.hu_moment_4, s.hu_moment_5, s.hu_moment_6, s.hu_moment_7,
-                    cal.sepal_length_ratio, cal.sepal_sharpness,
-                    cal.calyx_adhesion, cal.calyx_area_ratio,
-                    st.stem_thickness, st.stem_width_ratio
-                FROM Images i
-                LEFT JOIN Color_Features c ON i.image_id = c.image_id
-                LEFT JOIN Shape_Features s ON i.image_id = s.image_id
-                LEFT JOIN Calyx_Features cal ON i.image_id = cal.image_id
-                LEFT JOIN Stem_Features st ON i.image_id = st.image_id
-                WHERE i.image_id = %s
-            """
-            cursor.execute(sql, (image_id,))
-            return cursor.fetchone()
-    finally:
-        conn.close()
-
-
-def get_features_from_db():
-    """
-    Hàm quan trọng nhất: Lấy toàn bộ vector đặc trưng của tất cả ảnh
-    để đưa vào thuật toán tìm kiếm tương đồng (Cosine Similarity).
-    Trả về: List các dictionary, mỗi dict chứa id, path và các đặc trưng số.
-    """
-    conn = get_connection()
-    if not conn:
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+            if not rows:
+                return []
+            return rows
+    except Exception as e:
+        print(f"[ERR] Lỗi DB: {e}")
         return []
 
-    try:
-        with conn.cursor() as cursor:
-            # Chỉ lấy các trường số học (bỏ qua JSON histogram để tránh nặng máy)
-            sql = """
-                SELECT
-                    i.image_id, i.file_path, i.flower_species,
-                    c.mean_h, c.mean_s, c.std_h, c.std_s, c.entropy, c.dominant_color_ratio,
-                    s.area, s.perimeter, s.circularity, s.aspect_ratio, s.solidity,
-                    s.hu_moment_1, s.hu_moment_2, s.hu_moment_3,
-                    s.hu_moment_4, s.hu_moment_5, s.hu_moment_6, s.hu_moment_7,
-                    cal.sepal_length_ratio, cal.sepal_sharpness, cal.calyx_adhesion,
-                    st.stem_thickness, st.stem_width_ratio
-                FROM Images i
-                LEFT JOIN Color_Features c ON i.image_id = c.image_id
-                LEFT JOIN Shape_Features s ON i.image_id = s.image_id
-                LEFT JOIN Calyx_Features cal ON i.image_id = cal.image_id
-                LEFT JOIN Stem_Features st ON i.image_id = st.image_id
-            """
-            cursor.execute(sql)
-            return cursor.fetchall()
     finally:
         conn.close()
 
 
-# --- TEST THỬ ---
+def get_image_info(image_id):
+    sql = "SELECT * FROM Images WHERE image_id = %s"
+    params = (image_id,)
+    return fetch_all(sql, params)
+
+
+def get_color_features(image_id):
+    sql = "SELECT * FROM Color_Features WHERE image_id = %s"
+    params = (image_id,)
+    return fetch_all(sql, params)
+
+
+def get_shape_features(image_id):
+    sql = "SELECT * FROM Shape_Features WHERE image_id = %s"
+    params = (image_id,)
+    return fetch_all(sql, params)
+
+
+def get_calyx_features(image_id):
+    sql = "SELECT * FROM Calyx_Features WHERE image_id = %s"
+    params = (image_id,)
+    return fetch_all(sql, params)
+
+
+def get_stem_features(image_id):
+    sql = "SELECT * FROM Stem_Features WHERE image_id = %s"
+    params = (image_id,)
+    return fetch_all(sql, params)
+
+
+def get_image_feature_from_db(image_id):
+    """Trả về 1 dict thuộc tính đã trích xuất lấy từ database"""
+    feats = {}
+    feats["file"] = get_image_info(image_id)
+    feats["color"] = get_color_features(image_id)
+    feats["shape"] = get_shape_features(image_id)
+    feats["calyx"] = get_calyx_features(image_id)
+    feats["stem"] = get_stem_features(image_id)
+    return feats
+
+
+def get_all_image_id(count):
+    """Lấy danh sách các image_id từ database -> trả về 1 list[Interger]"""
+    sql = "SELECT image_id FROM images LIMIT %s"
+    params = (count,)
+    results = fetch_all(sql, params)
+    id_list = [x["image_id"] for x in results]
+    return id_list
+
+
+def get_all_feature_from_db(count=1500):
+    image_id_list = get_all_image_id(count)
+    results = []
+
+    for image_id in image_id_list:
+        feature_dict = get_image_feature_from_db(image_id)
+        results.append(feature_dict)
+
+    return results
+
+
 if __name__ == "__main__":
-    print("1. Lấy danh sách ảnh cơ bản:")
-    print(get_all_images_basic()[:2])  # In thử 2 ảnh đầu
+    all_features = get_all_feature_from_db(5)
 
-    print("\n2. Lấy toàn bộ đặc trưng để tìm kiếm:")
-    data = get_features_from_db()
-    if data:
-        print(f"Đã lấy được {len(data)} ảnh.")
-        print("Các trường của ảnh đầu tiên:", list(data[0].keys()))
+    # In 1 phần tử đầu tiên cho gọn
+    for image_feature in all_features:
+        print_dict(image_feature)

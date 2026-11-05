@@ -1,3 +1,4 @@
+from pprint import pprint
 import cv2
 import numpy as np
 
@@ -25,3 +26,8 @@ def rgb_to_grayscale(img_rgb):
 def rgb_to_hsv(img_rgb):
     """Chuyển đổi ảnh RGB sang không gian màu HSV."""
     return cv2.cvtColor(img_rgb, cv2.COLOR_RGB2HSV)
+
+
+def print_dict(dict):
+    """Hiện thị output ra terminal dạng Dict có cấu trúc đẹp hơn"""
+    pprint(dict, width=120)
