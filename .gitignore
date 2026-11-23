@@ -3,3 +3,8 @@ data/
 __pycache__/
 testdb.sql
 tempCodeRunnerFile.py
+.tmp_streamlit/
+tmp*/
+*.log
+annotations/
+bao_cao/phan_4/danh_gia/

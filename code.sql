@@ -13,6 +13,15 @@ CREATE TABLE Images (
 );
 
 -- 3. Bộ thuộc tính 1: Màu sắc chủ đạo
+CREATE TABLE IF NOT EXISTS Image_Review (
+    image_id INT PRIMARY KEY,
+    calyx_status ENUM('unknown','present','absent','unobservable') NOT NULL DEFAULT 'unknown',
+    stem_status ENUM('unknown','present','absent','unobservable') NOT NULL DEFAULT 'unknown',
+    note VARCHAR(1000) NOT NULL DEFAULT '',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (image_id) REFERENCES Images(image_id) ON DELETE CASCADE
+);
+
 CREATE TABLE Color_Features (
     image_id INT PRIMARY KEY,
     hist_hsv JSON,                          -- Lưu histogram 12H x 3S x 3V dưới dạng JSON (mảng 108 phần tử)

@@ -1,6 +1,40 @@
-import json
 from db_connection import get_connection
+from similarity import Descriptor
 from utils import print_dict
+
+
+def read_catalog():
+    """Đọc một ảnh và đủ bốn bộ đặc trưng trên mỗi dòng của một phép JOIN."""
+    from image_review import read_organ_reviews
+    read_organ_reviews()
+    conn = get_connection()
+    if conn is None:
+        raise RuntimeError("Không kết nối được MySQL. Kiểm tra dịch vụ và cấu hình .env.")
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT i.image_id, i.file_name, i.file_path, c.*, sh.*, ca.*, st.*, r.calyx_status, r.stem_status
+                FROM Images i
+                LEFT JOIN Color_Features c USING (image_id)
+                LEFT JOIN Shape_Features sh USING (image_id)
+                LEFT JOIN Calyx_Features ca USING (image_id)
+                LEFT JOIN Stem_Features st USING (image_id)
+                LEFT JOIN Image_Review r USING (image_id)
+                ORDER BY i.image_id
+            """)
+            catalog = []
+            for row in cursor.fetchall():
+                if row.get("calyx_status") in ("absent", "unobservable"):
+                    for key in ("sepal_length_ratio", "sepal_sharpness", "calyx_adhesion", "calyx_area_ratio"):
+                        row[key] = 0.
+                try:
+                    descriptor = Descriptor.from_row(row)
+                except (ValueError, TypeError) as exc:
+                    raise ValueError(f"Đặc trưng trong CSDL chưa hợp lệ: {row['file_name']}") from exc
+                catalog.append((row["image_id"], row["file_name"], row["file_path"], descriptor))
+            return catalog
+    finally:
+        conn.close()
 
 
 def fetch_all(sql, params=()):

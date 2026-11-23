@@ -27,9 +27,7 @@ def _hist_hsv_12x3x3(hsv, mask):
     hq = np.clip((pix[:, 0].astype(np.float32) / 180.0 * 12).astype(int), 0, 11)
     sq = np.clip((pix[:, 1].astype(np.float32) / 256.0 * 3).astype(int), 0, 2)
     vq = np.clip((pix[:, 2].astype(np.float32) / 256.0 * 3).astype(int), 0, 2)
-    hist = np.zeros(12 * 3 * 3, dtype=np.float32)
-    for h_, s_, v_ in zip(hq, sq, vq):
-        hist[int(max(h_ * 9 + s_ * 3 + v_, 1))] += 1
+    hist = np.bincount(hq * 9 + sq * 3 + vq, minlength=108).astype(np.float32)
     total = hist.sum()
     if total > 0:
         hist /= total
@@ -58,6 +56,14 @@ def _gradient_s_vs_radius(hsv, mask):
     return float(slope)
 
 
+def circular_hue_stats(degrees):
+    theta = np.deg2rad(np.asarray(degrees, dtype=float))
+    c, s = np.cos(theta).mean(), np.sin(theta).mean()
+    r = float(np.clip(np.hypot(c, s), 1e-12, 1.))
+    mean = float(np.rad2deg(np.arctan2(s, c)) % 360) if r > 1e-6 else 0.
+    return mean % 360, float(np.rad2deg(np.sqrt(-2*np.log(r))))
+
+
 def extract_color_features(prep):
     hsv = prep["hsv"]
     mask = prep["flower_mask"]
@@ -80,9 +86,8 @@ def extract_color_features(prep):
     Hv = H[pix_mask].astype(np.float32) * 2.0  # OpenCV H 0-180 -> độ 0-360
     Sv = S[pix_mask].astype(np.float32) / 255.0
 
-    mu_H = float(np.mean(Hv))
+    mu_H, sigma_H = circular_hue_stats(Hv)
     mu_S = float(np.mean(Sv))
-    sigma_H = float(np.std(Hv))
     sigma_S = float(np.std(Sv))
 
     # Entropy trên 12 vùng H
@@ -127,8 +132,8 @@ def extract_shape_features(prep):
             "hu_moments": np.zeros(7, dtype=np.float32),
         }
     cnt = max(cnts, key=cv2.contourArea)
-    area = float(cv2.contourArea(cnt))
-    perim = float(cv2.arcLength(cnt, True))
+    area = float(cv2.countNonZero(mask))
+    perim = float(len(cnt))  # CHAIN_APPROX_NONE giữ từng điểm biên ngoài.
     h_img, w_img = mask.shape
     area_ratio = area / (h_img * w_img)
 
@@ -138,13 +143,13 @@ def extract_shape_features(prep):
     aspect_ratio = (bw / float(bh)) if bh > 0 else 0.0
 
     hull = cv2.convexHull(cnt)
-    hull_area = float(cv2.contourArea(hull))
+    hull_mask = np.zeros_like(mask)
+    cv2.fillConvexPoly(hull_mask, hull, 255)
+    hull_area = float(cv2.countNonZero(hull_mask))
     solidity = (area / hull_area) if hull_area > 0 else 0.0
 
     moments = cv2.moments(mask, binaryImage=True)
     hu = cv2.HuMoments(moments).flatten()
-    # log-transform để giảm range
-    hu_log = np.sign(hu) * np.log10(np.abs(hu) + 1e-30)
 
     return {
         "area_ratio": area_ratio,
@@ -152,7 +157,7 @@ def extract_shape_features(prep):
         "circularity": circularity,
         "aspect_ratio": aspect_ratio,
         "solidity": solidity,
-        "hu_moments": hu_log.astype(np.float32),  # 7 chiều
+        "hu_moments": hu,
     }
 
 
@@ -160,119 +165,55 @@ def extract_shape_features(prep):
 # 4. BỘ THUỘC TÍNH 3 – ĐÀI HOA
 # ---------------------------------------------------------------------------
 def extract_calyx_features(prep):
-    """
-    Bộ 3 – Lá đài / Đài hoa (khớp schema DB):
-      - sepal_length_ratio : chiều dài lá đài / đường kính bông
-      - sepal_sharpness    : độ nhọn lá đài (0..90, càng lớn càng nhọn)
-      - calyx_adhesion     : mức bám đài vào bông (0..1, càng lớn càng sát)
-      - calyx_area_ratio   : diện tích đài / diện tích bông (0..1)
-    """
-    flower_mask = prep["flower_mask"]
-    calyx_mask = prep["calyx_mask"]
+    """Ước lượng chiều dài gốc–đỉnh và góc tại các đầu lá đài thấy được."""
+    flower, calyx = prep["flower_mask"], prep["calyx_mask"]
+    _, _, w, h = cv2.boundingRect(flower)
+    diameter = max(w, h)
+    ys, xs = np.where(calyx > 0)
+    result = dict(sepal_length_ratio=0., sepal_sharpness=0.,
+                  calyx_adhesion=0., calyx_area_ratio=0.)
+    if not diameter or len(xs) < 5:
+        return result
 
-    empty = {
-        "sepal_length_ratio": 0.0,
-        "sepal_sharpness": 0.0,
-        "calyx_adhesion": 0.0,
-        "calyx_area_ratio": 0.0,
-    }
-
-    ys_f, xs_f = np.where(flower_mask > 0)
-    if len(ys_f) == 0:
-        return empty
-
-    # --- Đường kính bông ---
-    bf = cv2.boundingRect(flower_mask)
-    D = float(max(bf[2], bf[3]))
-    if D <= 0:
-        return empty
-    S_flower = float(np.count_nonzero(flower_mask))
-
-    # Tâm bbox bông (ổn định hơn centroid khi hoa lệch)
-    cx = bf[0] + bf[2] / 2.0
-    cy = bf[1] + bf[3] / 2.0
-
-    cnts, _ = cv2.findContours(calyx_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    if not cnts:
-        return empty
-
-    calyx_ys, calyx_xs = np.where(calyx_mask > 0)
-    if len(calyx_ys) < 5:
-        return empty
-
-    # ------------------------------------------------------------------
-    # 1) SEPAL LENGTH: PCA trên toàn bộ pixel đài → chiều dài trục chính
-    #    (ổn định với mọi hướng xòe của lá đài)
-    # ------------------------------------------------------------------
-    pts = np.column_stack([calyx_xs, calyx_ys]).astype(np.float32)
-    pts_c = pts - pts.mean(axis=0)
-    cov = np.cov(pts_c.T)
-    try:
-        eigvals, eigvecs = np.linalg.eigh(cov)
-        major = eigvecs[:, np.argmax(eigvals)]
-        proj = pts_c @ major
-        sepal_len = float(proj.max() - proj.min())
-    except np.linalg.LinAlgError:
-        dx = pts[:, 0] - cx
-        dy = pts[:, 1] - cy
-        sepal_len = float(np.sqrt(dx * dx + dy * dy).max())
-
-    sepal_length_ratio = float(np.clip(sepal_len / D, 0.0, 1.0))
-
-    # ------------------------------------------------------------------
-    # 2) SEPAL SHARPNESS: góc nhọn nhất tại đỉnh lá đài
-    #    → 0° = rất nhọn → sharpness = 90; 90° = tù → sharpness = 0
-    # ------------------------------------------------------------------
-    cnt = max(cnts, key=cv2.contourArea)
-    peri = cv2.arcLength(cnt, True)
-    approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
-    angles = []
-    n = len(approx)
-    if n >= 3:
-        for i in range(n):
-            p0 = approx[i][0].astype(np.float64)
-            p1 = approx[(i - 1) % n][0].astype(np.float64)
-            p2 = approx[(i + 1) % n][0].astype(np.float64)
-            v1 = p1 - p0
-            v2 = p2 - p0
-            n1 = np.linalg.norm(v1)
-            n2 = np.linalg.norm(v2)
-            if n1 < 1e-6 or n2 < 1e-6:
+    # Gốc chung ước lượng tại vùng đài chuyển xuống cuống.
+    bottom = ys.max()
+    base = np.array([np.median(xs[ys >= bottom - 2]), bottom])
+    if prep.get('calyx_attachment') and prep['stem_mask'].any():
+        # For sideways/hanging detections, the root is the calyx point nearest
+        # the stalk, rather than the lowest pixel in image coordinates.
+        stem_distance=cv2.distanceTransform(np.uint8(prep['stem_mask']==0),cv2.DIST_L2,5)
+        near=stem_distance[ys,xs]<=stem_distance[ys,xs].min()+2
+        base=np.array([np.median(xs[near]),np.median(ys[near])])
+    contours, _ = cv2.findContours(calyx, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    lengths, angles = [], []
+    for cnt in contours:
+        if cv2.contourArea(cnt) < 3:
+            continue
+        epsilon = max(1., .025 * cv2.arcLength(cnt, True))
+        poly = cv2.approxPolyDP(cnt, epsilon, True).reshape(-1, 2).astype(float)
+        if len(poly) < 3:
+            continue
+        radii = np.linalg.norm(poly - base, axis=1)
+        for i, point in enumerate(poly):
+            # Một đỉnh lá là cực đại cục bộ của khoảng cách tới gốc.
+            j = (i + 1) % len(poly)
+            if radii[i] <= radii[i-1] or radii[i] < radii[j] or radii[i] < 2:
                 continue
-            cos_a = np.clip(np.dot(v1, v2) / (n1 * n2), -1.0, 1.0)
-            angles.append(math.degrees(math.acos(cos_a)))
+            u, v = poly[i-1] - point, poly[j] - point
+            cosine = np.dot(u, v) / (np.linalg.norm(u) * np.linalg.norm(v))
+            angle = math.degrees(math.acos(float(np.clip(cosine, -1., 1.))))
+            if angle < 150:
+                lengths.append(radii[i])
+                angles.append(angle)
 
-    if angles:
-        sharp = [a for a in angles if a < 90.0]
-        min_angle = float(min(sharp) if sharp else min(angles))
-        sepal_sharpness = float(np.clip(90.0 - min_angle, 0.0, 90.0))
-    else:
-        sepal_sharpness = 0.0
-
-    # ------------------------------------------------------------------
-    # 3) CALYX ADHESION: 1 - (khoảng cách TB đài→bông / D)
-    #    càng sát bông → adhesion càng gần 1
-    # ------------------------------------------------------------------
-    dist_to_flower = cv2.distanceTransform(
-        (flower_mask > 0).astype(np.uint8), cv2.DIST_L2, 5
-    )
-    d_vals = dist_to_flower[calyx_ys, calyx_xs]
-    mean_d_norm = float(np.mean(d_vals)) / D
-    calyx_adhesion = float(np.clip(1.0 - mean_d_norm, 0.0, 1.0))
-
-    # ------------------------------------------------------------------
-    # 4) CALYX AREA RATIO: diện tích đài / diện tích bông
-    # ------------------------------------------------------------------
-    calyx_area = float(len(calyx_ys))
-    calyx_area_ratio = calyx_area / S_flower if S_flower > 0 else 0.0
-    calyx_area_ratio = float(np.clip(calyx_area_ratio, 0.0, 1.0))
-
-    return {
-        "sepal_length_ratio": sepal_length_ratio,
-        "sepal_sharpness": sepal_sharpness,
-        "calyx_adhesion": calyx_adhesion,
-        "calyx_area_ratio": calyx_area_ratio,
-    }
+    if lengths:
+        result["sepal_length_ratio"] = float(np.mean(lengths)) / diameter
+        result["sepal_sharpness"] = float(np.mean(angles))
+    distance = cv2.distanceTransform(np.uint8(flower == 0), cv2.DIST_L2,
+                                     cv2.DIST_MASK_PRECISE)
+    result["calyx_adhesion"] = float(distance[ys, xs].mean()) / diameter
+    result["calyx_area_ratio"] = len(xs) / cv2.countNonZero(flower)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +222,11 @@ def extract_calyx_features(prep):
 def extract_stem_features(prep):
     stem_mask = prep["stem_mask"]
     flower_mask = prep["flower_mask"]
+    # A newly recovered sideways stem is measured in its detection frame.
+    # Existing detections retain their original measurements.
+    if prep.get('stem_measurement') is not None:
+        stem_mask = prep['stem_measurement']['measurement_mask']
+        flower_mask = prep['stem_measurement']['flower_mask']
 
     ys_s, xs_s = np.where(stem_mask > 0)
     if len(ys_s) < 5:
@@ -302,16 +248,21 @@ def extract_stem_features(prep):
     }
 
 
-def extract_all_feature(file_path):
+def extract_all_feature(file_path, calyx_status="unknown", stem_status="unknown"):
     """Trích xuất toàn bộ thuộc tính từ 1 file ảnh, trả về dict."""
-    img = cv2.imread(file_path)
+    img = cv2.imdecode(np.fromfile(file_path, dtype=np.uint8), cv2.IMREAD_COLOR)
     if img is None:
-        raise FileNotFoundError(f"Không đọc được ảnh: {file_path}")
-    img_bgr = img
-    prep = preprocess_image(img_bgr)
+        raise ValueError(f"Không đọc được ảnh: {file_path}")
+    return features_from_masks(preprocess_image(img, calyx_status=calyx_status,stem_status=stem_status), file_path)
 
-    feats = {}
-    feats["file"] = file_path
+
+def features_from_masks(prep, file_path):
+    """Dùng chung phép đo cho ảnh trong kho, ảnh minh họa và ảnh truy vấn."""
+    if not cv2.countNonZero(prep["flower_mask"]):
+        raise ValueError(f"Chưa phân đoạn được bông: {file_path}")
+    feats = {"file": str(file_path)}
+    feats["calyx_status"] = prep.get("calyx_status", "unknown")
+    feats["stem_status"] = prep.get("stem_status", "unknown")
     feats["color"] = extract_color_features(prep)
     feats["shape"] = extract_shape_features(prep)
     feats["calyx"] = extract_calyx_features(prep)
