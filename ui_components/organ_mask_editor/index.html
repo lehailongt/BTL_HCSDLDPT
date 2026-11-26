@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><style>
+body{font:14px system-ui;margin:0;color:#242424}button,select{font:inherit;padding:7px;margin:3px;border:1px solid #ccc;border-radius:5px;background:white}button:hover{background:#eee}canvas{width:100%;max-width:512px;aspect-ratio:1;display:block;border:1px solid #ddd;cursor:crosshair;touch-action:none}p{margin:8px 0;color:#555}.bar{max-width:620px}#message{min-height:20px}
+</style></head><body>
+<div class="bar"><select id="organ" aria-label="Bộ phận đang khoanh"><option value="stem">Cuống — xanh lam</option><option value="calyx">Đài — vàng</option></select>
+<button id="finish">Khép vùng</button><button id="undo">Lùi điểm</button><button id="clear">Xóa vùng bộ phận này</button></div>
+<p>Nhấp lần lượt quanh đường bao, rồi chọn Khép vùng. Có thể khoanh nhiều vùng rời nhau.</p>
+<canvas id="canvas" width="256" height="256" aria-label="Ảnh để khoanh vùng đài và cuống"></canvas><p id="message"></p>
+<script>
+const canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d'),picture=new Image();
+let regions={calyx:[],stem:[]},points=[],token=null,sequence=0;
+const emit=(type,extra={})=>parent.postMessage({isStreamlitMessage:true,type,...extra},'*');
+function publish(){emit('streamlit:setComponentValue',{value:{polygons:regions,sequence:++sequence},dataType:'json'});}
+function height(){emit('streamlit:setFrameHeight',{height:document.body.scrollHeight+8});}
+function paint(){ctx.clearRect(0,0,canvas.width,canvas.height);if(picture.complete)ctx.drawImage(picture,0,0,canvas.width,canvas.height);
+ for(const organ of ['calyx','stem']){ctx.strokeStyle=organ==='calyx'?'#ffdd00':'#00cfff';ctx.fillStyle=organ==='calyx'?'#ffdd0050':'#00cfff50';ctx.lineWidth=1;
+  for(const polygon of regions[organ]){ctx.beginPath();polygon.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.closePath();ctx.fill();ctx.stroke();}}
+ ctx.strokeStyle='#f22';ctx.fillStyle='#f22';ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.stroke();for(const p of points){ctx.beginPath();ctx.arc(...p,1.5,0,Math.PI*2);ctx.fill();}
+ document.getElementById('message').textContent=points.length+' điểm chưa khép · '+regions.stem.length+' vùng cuống · '+regions.calyx.length+' vùng đài';height();}
+canvas.addEventListener('pointerdown',event=>{const r=canvas.getBoundingClientRect();points.push([Math.max(0,Math.min(canvas.width-1,Math.round((event.clientX-r.left)*canvas.width/r.width))),Math.max(0,Math.min(canvas.height-1,Math.round((event.clientY-r.top)*canvas.height/r.height)))]);paint();});
+document.getElementById('finish').onclick=()=>{if(points.length<3){document.getElementById('message').textContent='Cần ít nhất 3 điểm để khép vùng.';return;}regions[document.getElementById('organ').value].push(points);points=[];publish();paint();};
+document.getElementById('undo').onclick=()=>{points.pop();paint();};
+document.getElementById('clear').onclick=()=>{points=[];regions[document.getElementById('organ').value]=[];publish();paint();};
+document.getElementById('organ').onchange=()=>{points=[];paint();};
+picture.onload=paint;
+window.addEventListener('message',event=>{if(event.data.type!=='streamlit:render')return;const args=event.data.args;if(token!==args.token){token=args.token;regions=JSON.parse(JSON.stringify(args.polygons||{calyx:[],stem:[]}));points=[];canvas.width=args.width;canvas.height=args.height;picture.src=args.image;paint();}});
+window.addEventListener('resize',height);emit('streamlit:componentReady',{apiVersion:1});height();
+</script></body></html>
